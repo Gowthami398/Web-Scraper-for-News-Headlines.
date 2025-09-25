@@ -1,0 +1,100 @@
+import sys
+import time
+from typing import List
+
+import requests
+from bs4 import BeautifulSoup
+
+
+HN_TOP_URL = "https://news.ycombinator.com/"
+
+
+def fetch_html(url: str) -> str:
+    """Fetch HTML content for the given URL with basic headers and timeout."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        )
+    }
+    response = requests.get(url, headers=headers, timeout=20)
+    response.raise_for_status()
+    return response.text
+
+
+def parse_hn_headlines(html: str, max_items: int = 50) -> List[str]:
+    """Parse Hacker News front page for top story titles.
+
+    Primary strategy: extract anchors inside spans with class 'titleline'.
+    Fallback: gather text of h1/h2 tags if primary yields nothing.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    titles: List[str] = []
+
+    # Primary: HN specific
+    for span in soup.select("span.titleline"):
+        a = span.find("a")
+        if a and a.get_text(strip=True):
+            titles.append(a.get_text(strip=True))
+            if len(titles) >= max_items:
+                break
+
+    # Fallback: generic h1/h2
+    if not titles:
+        for tag in soup.find_all(["h1", "h2"]):
+            text = tag.get_text(strip=True)
+            if text:
+                titles.append(text)
+                if len(titles) >= max_items:
+                    break
+
+    # Deduplicate while preserving order
+    seen = set()
+    deduped: List[str] = []
+    for title in titles:
+        if title not in seen:
+            deduped.append(title)
+            seen.add(title)
+    return deduped
+
+
+def save_headlines(headlines: List[str], output_path: str) -> None:
+    """Save headlines to a text file with a header and timestamp."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    header_lines = [
+        "Source: Hacker News (news.ycombinator.com)",
+        f"Scraped At: {timestamp}",
+        "",
+    ]
+    with open(output_path, "w", encoding="utf-8") as f:
+        for line in header_lines:
+            f.write(line + "\n")
+        for idx, title in enumerate(headlines, start=1):
+            f.write(f"{idx}. {title}\n")
+
+
+def main() -> int:
+    try:
+        html = fetch_html(HN_TOP_URL)
+        headlines = parse_hn_headlines(html)
+        if not headlines:
+            print("No headlines were found.")
+            return 2
+        save_headlines(headlines, "headlines.txt")
+        print(f"Saved {len(headlines)} headlines to headlines.txt")
+        return 0
+    except requests.HTTPError as http_err:
+        print(f"HTTP error: {http_err}")
+        return 1
+    except requests.RequestException as req_err:
+        print(f"Network error: {req_err}")
+        return 1
+    except Exception as exc:
+        print(f"Unexpected error: {exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
